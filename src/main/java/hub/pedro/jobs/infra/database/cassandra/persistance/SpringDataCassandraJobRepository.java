@@ -4,4 +4,4 @@ import java.util.UUID;
 import org.springframework.data.cassandra.repository.CassandraRepository;
 
 public interface SpringDataCassandraJobRepository
-    extends CassandraRepository<JobCassandraModel, UUID> {}
+        extends CassandraRepository<JobCassandraModel, UUID> {}

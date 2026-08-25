@@ -1,3 +1,7 @@
 package hub.pedro.jobs.domain.repository;
 
-public interface JobRepository {}
+import hub.pedro.jobs.domain.entity.Job;
+
+public interface JobRepository {
+    void save(Job job);
+}

@@ -1,10 +1,13 @@
 package hub.pedro.jobs.domain.entity;
 
-import hub.pedro.jobs.domain.JobStatus;
+import hub.pedro.jobs.domain.interfaces.JobStatus;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.jmolecules.ddd.annotation.AggregateRoot;
 
+@AggregateRoot
 public class Job {
     private UUID id;
     private Instant createdAt;
@@ -36,7 +39,11 @@ public class Job {
         this.finishedAt = finishedAt;
         this.status = status;
         this.attempts = attempts;
-        this.errors = errors;
+        this.errors = new ArrayList<>();
+    }
+
+    public static Builder builder() {
+        return new Builder();
     }
 
     public static Job createNewJob(String payload) {
@@ -47,7 +54,44 @@ public class Job {
                 .payload(payload)
                 .status(JobStatus.PENDING)
                 .attempts(0)
+                .errors(new ArrayList<>())
                 .build();
+    }
+
+    public UUID getId() {
+        return id;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public String getPayload() {
+        return payload;
+    }
+
+    public Instant getScheduledAt() {
+        return scheduledAt;
+    }
+
+    public Instant getFinishedAt() {
+        return finishedAt;
+    }
+
+    public JobStatus getStatus() {
+        return status;
+    }
+
+    public Integer getAttempts() {
+        return attempts;
+    }
+
+    public List<String> getErrors() {
+        return errors;
     }
 
     public void markAsFailed(String errorMessage) {
@@ -71,7 +115,6 @@ public class Job {
         this.updatedAt = Instant.now();
     }
 
-    // --- BUILDER PATTERN (Apenas para uso interno e Infraestrutura) ---
     public static class Builder {
         private UUID id;
         private Instant createdAt;
