@@ -2,6 +2,7 @@ package hub.pedro.jobs.infra.database.cassandra.repository;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.cassandra.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import hub.pedro.jobs.domain.entity.Job;
@@ -9,6 +10,9 @@ import hub.pedro.jobs.domain.repository.JobRepository;
 import hub.pedro.jobs.infra.database.cassandra.mapper.JobMapper;
 import hub.pedro.jobs.infra.database.cassandra.persistance.JobCassandraModel;
 import hub.pedro.jobs.infra.database.cassandra.persistance.SpringDataCassandraJobRepository;
+
+import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public class CassandraJobRepository implements JobRepository {
@@ -28,5 +32,14 @@ public class CassandraJobRepository implements JobRepository {
         JobCassandraModel jobModel = jobMapper.toModel(job);
         repository.save(jobModel);
         logger.info("Job salvo com sucesso!");
+    }
+
+    /**
+     * @param id
+     * @return
+     */
+    @Override
+    public Optional<Job> findById (UUID id) {
+        return repository.findById(id).map(model -> jobMapper.toDomain(model));
     }
 }

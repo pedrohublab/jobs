@@ -6,8 +6,8 @@ import uuid
 
 # Configurações do teste
 URL = "http://localhost:8080/api/jobs/nfs"
-NUM_REQUESTS = 1000  # Quantas notas vamos disparar
-CONCURRENCY = 100    # Quantas conexões simultâneas
+NUM_REQUESTS = 20000
+CONCURRENCY = 500
 
 # Template de uma Nota Fiscal em XML (Simplificado)
 XML_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>

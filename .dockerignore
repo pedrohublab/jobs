@@ -4,7 +4,7 @@ target/
 jobs.iml
 AGENTS.md
 HELP.MD
-start-env.sh
+scripts/start-env.sh
 mvnw.cmd
 qodana.yaml
 .github

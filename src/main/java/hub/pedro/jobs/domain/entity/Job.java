@@ -42,6 +42,12 @@ public class Job {
         this.errors = new ArrayList<>();
     }
 
+
+    public void finalizar() {
+        this.status = JobStatus.FINISHED;
+        this.finishedAt = Instant.now();
+    }
+
     public static Builder builder() {
         return new Builder();
     }
