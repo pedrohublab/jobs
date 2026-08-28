@@ -32,6 +32,16 @@ build/
 ### VS Code ###
 .vscode/
 
-Jobs.log
+### Logs ###
+*.log
 
-scripts
+### Agents (Teamwork / AI) ###
+.agents/
+
+### OS ###
+.DS_Store
+Thumbs.db
+desktop.ini
+
+### Maven Wrapper (binário) ###
+.mvn/wrapper/maven-wrapper.jar
