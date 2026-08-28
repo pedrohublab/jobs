@@ -1,25 +1,54 @@
 services:
+
+  # ── Microserviço 1: API REST (input de NF-es) ──────────────────────────────
   jobs-api:
-    image: jobs-api:v1
-    ports: ["8080:8080"]
-    depends_on:
-      - cassandra
-      - kafka
-    environment:
-      - SPRING_CASSANDRA_CONTACT_POINTS=cassandra
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - JAVA_OPTS=-Xms256m -Xmx256m
-  cassandra:
-    image: cassandra:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: jobs-api-runtime
+    image: jobs-api:latest
     ports:
-      - "9042:9042"
+      - "8080:8080"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
-      - CASSANDRA_CLUSTER_NAME=MyCluster
-      - CASSANDRA_DC=datacenter1
-      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
-      - JVM_OPTS=-Xms512M -Xmx512M
+      - SPRING_APPLICATION_NAME=jobs-api
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgresql:5432/jobsdb
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - JAVA_OPTS=-Xms256m -Xmx256m
+    restart: on-failure
+
+  # ── Microserviço 2: Worker (consumer Kafka + processamento @Async) ──────────
+  jobs-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: jobs-consumer-runtime
+    image: jobs-consumer:latest
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      - SPRING_APPLICATION_NAME=jobs-consumer
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgresql:5432/jobsdb
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - JAVA_OPTS=-Xms256m -Xmx256m
+    restart: on-failure
+
+  # ── Kafka (KRaft mode, sem Zookeeper) ───────────────────────────────────────
   kafka:
-    image: bitnamilegacy/kafka:latest
+    image: bitnamilegacy/kafka:3.9.0
     ports:
       - "9094:9094"
     environment:
@@ -33,4 +62,32 @@ services:
       - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - kaf-data:/bitnami/kafka
 
+  # ── PostgreSQL Database ─────────────────────────────────────────────────────
+  postgresql:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=jobsdb
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+
+volumes:
+  postgresql-data:
+  kaf-data:
