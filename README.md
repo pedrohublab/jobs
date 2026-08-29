@@ -4,30 +4,23 @@
 
 ---
 
-## 1. Visão Geral e Propósito do Projeto
+## 1. Visão Geral e Propósito do Projeto: Arquitetura para Alta Volumetria em Fintechs
 
-O **Jobs — NFS-e Emission Pipeline** é um sistema distribuído assíncrono e orientado a eventos (*Event-Driven Architecture - EDA*), concebido para lidar com a ingestão e o processamento de lotes de **Notas Fiscais de Serviços Eletrônicas (NFS-e)** em alta volumetria.
+O **Jobs — Asynchronous Processing Pipeline** é uma solução arquitetural focada em resolver um dos problemas mais críticos de engenharia em sistemas financeiros (Fintechs) e E-commerces: **a ingestão e o processamento assíncrono de Transações e Pedidos em altíssima volumetria sem perda de dados.**
 
-```
-                  ┌─────────────────────────────────────────────────────────┐
-                  │                      CONTEXTO DE NEGÓCIO                │
-                  │                                                         │
-  Clientes / ERPs │  • Picos sazonais de faturamento e fechamento de mês     │
-  emitem milhares │  • Comunicação com Prefeituras/SEFAZ é lenta (1s - 5s)  │
-  de NFS-e/segundo│  • Serviços fiscais municipais sofrem instabilidade     │
-         │        │  • Chamadas síncronas HTTP esgotam threads da API       │
-         ▼        └────────────────────────────┬────────────────────────────┘
-┌─────────────────┐                            │
-│ Pipeline Assínc.│◄───────────────────────────┘
-│ Orientado a     │  1. Ingestão imediata na borda com confirmação HTTP 202 Accepted
-│ Eventos (Jobs)  │  2. Nivelamento de carga (Load Leveling) via tópicos Apache Kafka
-└─────────────────┘  3. Processamento resiliente, desacoplado e tolerante a falhas
-```
+### O Problema de Negócio (A Dor Real)
+Em cenários de alto tráfego (como Black Friday ou picos de transações bancárias), uma arquitetura monolítica síncrona que depende de APIs de terceiros (Gateways de Pagamento, Adquirentes ou APIs legadas) enfrenta gargalos fatais:
+1. **Fila de Espera:** A comunicação com integrações externas sofre latência variável, segurando a resposta do usuário.
+2. **Esgotamento de Recursos:** Manter milhares de conexões HTTP abertas esperando respostas esgota rapidamente o *thread pool* dos servidores, gerando quedas em cascata (*cascading failures*).
+3. **Inconsistência de Dados:** Se a aplicação cai durante a autorização de um pagamento ou processamento do job, o status é perdido, gerando prejuízos financeiros severos.
 
-### O Desafio de Negócio e a Solução Arquitetural
-1. **Instabilidade e Latência de Gateways Fiscais**: A integração direta e síncrona com webservices de Prefeituras e SEFAZ é suscetível a alta latência (1 a 5 segundos por nota) e indisponibilidades frequentes. Manter uma conexão HTTP aberta esperando a resposta da prefeitura esgota rapidamente o *thread pool* dos servidores web (Tomcat), gerando efeito cascata (*cascading failure*) e indisponibilidade total da aplicação.
-2. **Desacoplamento Temporal via Mensageria**: Ao adotar o padrão de mensageria com Apache Kafka, a API de entrada (`jobs-api`) apenas persiste o estado inicial (`PENDING`) e enfileira a intenção de emissão no tópico `job-created`. O retorno ao cliente HTTP é imediato (`202 Accepted`), liberando recursos de rede.
-3. **Isolamento de Regras Fiscais com Arquitetura Hexagonal**: As constantes mudanças de esquemas tributários e regras municipais ficam encapsuladas no núcleo de domínio (`domain`) e nos casos de uso (`app`), isoladas de frameworks web, drivers de banco de dados e bibliotecas de integração.
+### A Solução Arquitetural (Design Orientado a Eventos)
+Para garantir resiliência e disponibilidade de 99.99%, este projeto propõe uma **Arquitetura Distribuída e Orientada a Eventos (EDA)** com as seguintes decisões de System Design:
+
+1. **Ingestion Gateway (API):** A API atua como um funil ultra-rápido. Ela recebe a payload crua (`byte[]`) e a aceita imediatamente (`HTTP 202 Accepted`), livrando a thread do cliente em milissegundos sem gastar CPU com deserialização na borda.
+2. **Transactional Outbox Pattern:** Garante que a intenção de processamento seja salva no PostgreSQL na mesma transação que dispara o evento, eliminando o risco de *Dual-Write Hazard* e perda da transação.
+3. **Load Leveling com Apache Kafka:** O Kafka amortece o pico de requisições. O *worker* consome as mensagens no seu próprio ritmo, protegendo sistemas internos ou APIs de terceiros contra ataques de negação de serviço (DDoS) involuntários.
+4. **Armazenamento Híbrido (Polyglot Persistence):** O estado transacional (PENDING, DONE) fica no PostgreSQL, enquanto logs pesados e documentos associados são absorvidos pelo **Apache Cassandra**, otimizado para gravações massivas em disco.
 
 ---
 
