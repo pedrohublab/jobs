@@ -1,4 +1,4 @@
-# Jobs — NFS-e Emission Pipeline
+# Jobs — High-Volume Transaction Pipeline
 > **Guia Arquitetural, Referência Técnica e Mentoria de Engenharia de Software**  
 > *Stack: Java 21 | Spring Boot | Apache Kafka | PostgreSQL | Apache Cassandra | Hexagonal Architecture | DDD*
 
