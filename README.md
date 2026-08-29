@@ -26,7 +26,7 @@ Para garantir resiliência e disponibilidade de 99.99%, este projeto propõe uma
 
 ## 2. Diagrama de Arquitetura e Fluxo de Dados Ponta a Ponta
 
-O diagrama a seguir ilustra o fluxo completo de uma requisição desde a recepção pelo cliente HTTP até o processamento no worker de emissão e atualização do estado final:
+O diagrama a seguir ilustra o fluxo completo de uma requisição desde a recepção pelo cliente HTTP até o processamento no worker de autorização e atualização do estado final:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -35,7 +35,7 @@ O diagrama a seguir ilustra o fluxo completo de uma requisição desde a recepç
 
  [ Cliente / ERP ]
         │
-        │ 1. POST /api/jobs/nfs (Payload JSON da NFS-e)
+        │ 1. POST /api/jobs/trx (Payload JSON da Transação)
         ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
 │ MÓDULO: jobs-api (Porta 8080)                                                               │
@@ -73,11 +73,11 @@ O diagrama a seguir ilustra o fluxo completo de uma requisição desde a recepç
 │             ├── 7. Consulta Job no Banco ──────────► [ Driven Adapter: PostgreSQL ]         │
 │             │                                        └── PostgresJobRepository (jobsdb)     │
 │             │                                                                               │
-│             ├── 8. Emite NFS-e ────────────────────► [ Driven Adapter: Gateway Fiscal ]     │
-│             │                                        └── Simulador SEFAZ / Prefeitura       │
+│             ├── 8. Emite Transação ────────────────────► [ Driven Adapter: Gateway financeiro ]     │
+│             │                                        └── Simulador Bacen/Gateway / Adquirente       │
 │             │                                                                               │
 │             ├── 9. Persiste Documentos ────────────► [ Driven Adapter: Cassandra ]          │
-│             │    (XML DPS, XML Autorizado, PDF)       └── NfseDocumentoRepository            │
+│             │    (Payload do Pagamento, XML Autorizado, PDF)       └── TrxDocumentoRepository            │
 │             │                                             (chave_acesso como partition key)  │
 │             │                                                                               │
 │             └── 10. Atualiza Estado Final ─────────► [ Driven Adapter: PostgreSQL ]         │
@@ -101,12 +101,12 @@ O diagrama a seguir ilustra o fluxo completo de uma requisição desde a recepç
                           │ Consumidor inicia leitura do lote
                           ▼
                  ┌─────────────────┐
-                 │   PROCESSING    │  Lock otimista, payload em validação e envio fiscal.
+                 │   PROCESSING    │  Lock otimista, payload em validação e envio financeiro.
                  └────────┬────────┘
                           │
             ┌─────────────┴─────────────┐
             │                           │
-  Autorizado pela SEFAZ         Rejeição fiscal ou erro
+  Autorizado pela Bacen/Gateway         Rejeição financeiro ou erro
             ▼                           ▼
      ┌──────────────┐            ┌──────────────┐
      │  COMPLETED   │            │    FAILED    │  Erros registrados no histórico
@@ -146,7 +146,7 @@ jobs/
         │   ├── entity/Job.java             # Entidade de Negócio com transições de estado
         │   └── repository/JobRepository.java # Outbound Port
         ├── app/                            # Aplicação do Worker
-        │   └── service/JobProcessingService.java # Orquestração do Processamento Fiscal
+        │   └── service/JobProcessingService.java # Orquestração do Processamento financeiro
         ├── infra/                          # Infraestrutura do Consumer
         │   ├── database/postgresql/        # Adaptador JPA
         │   └── kafka/consumer/             # Driving Adapter Kafka Listener
@@ -157,7 +157,7 @@ jobs/
 
 | Camada | Responsabilidade | Dependências Permitidas | O que deve conter |
 |---|---|---|---|
-| `domain` | **Coração do Negócio**: Regras fiscais, invariantes de estado, entidades e interfaces de repositório. | **Nenhuma**. Código Java puro sem anotações de frameworks web ou JPA. | `Job`, `JobStatus`, `JobId`, `JobRepository` (Port). |
+| `domain` | **Coração do Negócio**: Regras financeiras, invariantes de estado, entidades e interfaces de repositório. | **Nenhuma**. Código Java puro sem anotações de frameworks web ou JPA. | `Job`, `JobStatus`, `JobId`, `JobRepository` (Port). |
 | `app` (application) | **Casos de Uso**: Orquestra o fluxo de dados entre o domínio e as portas externas. | Depende apenas da camada `domain`. | `ScheduleJobUseCase` (Port In), `JobEventPublisher` (Port Out), `JobService`. |
 | `infra` (infrastructure) | **Adaptadores de Saída (Driven Adapters)**: Implementações técnicas que conectam o sistema ao mundo externo. | Depende de `app`, `domain` e bibliotecas externas (Spring Data, Kafka, JDBC). | `PostgresJobRepository`, `KafkaJobEventPublisher`, `JobJpaEntity`. |
 | `web` | **Adaptador de Entrada (Driving Adapter)**: Expõe a API para o mundo externo via HTTP/REST. | Depende das portas de entrada de `app` e DTOs de transporte. | `JobController`, `PayloadSizeFilter`, DTOs de Request/Response. |
@@ -167,12 +167,12 @@ jobs/
 
 ## 4. Modelo de Dados e Contratos de Eventos
 
-### Modelo Relacional (PostgreSQL — Tabela `nfse_job`)
+### Modelo Relacional (PostgreSQL — Tabela `trx_job`)
 
-O estado transacional de cada lote/job é armazenado na tabela relacional `nfse_job` no PostgreSQL:
+O estado transacional de cada lote/job é armazenado na tabela relacional `trx_job` no PostgreSQL:
 
 ```sql
-CREATE TABLE nfse_job (
+CREATE TABLE trx_job (
     id            UUID PRIMARY KEY,
     payload       TEXT NOT NULL,
     status        VARCHAR(30) NOT NULL,
@@ -186,8 +186,8 @@ CREATE TABLE nfse_job (
 );
 
 -- Índices recomendados para alta performance operacional:
-CREATE INDEX idx_nfse_job_status ON nfse_job (status);
-CREATE INDEX idx_nfse_job_created_at ON nfse_job (created_at DESC);
+CREATE INDEX idx_trx_job_status ON trx_job (status);
+CREATE INDEX idx_trx_job_created_at ON trx_job (created_at DESC);
 ```
 
 ### Dicionário de Dados
@@ -195,31 +195,31 @@ CREATE INDEX idx_nfse_job_created_at ON nfse_job (created_at DESC);
 | Coluna | Tipo | Nullable | Descrição |
 |---|---|:---:|---|
 | `id` | `UUID` | Não | Chave primária identificadora única do Job (gerada pelo cliente ou pela API). |
-| `payload` | `TEXT` | Não | Conteúdo estruturado (JSON/XML) contendo os dados da DPS (Declaração de Prestação de Serviço). |
+| `payload` | `TEXT` | Não | Conteúdo estruturado (JSON/XML) contendo os dados da pagamento (Requisição de Pagamento). |
 | `status` | `VARCHAR(30)` | Não | Estado atual do processamento: `PENDING`, `PROCESSING`, `DONE`, `FAILED`. |
 | `created_at` | `TIMESTAMPTZ` | Não | Timestamp UTC de recebimento e persistência inicial pela API. |
 | `updated_at` | `TIMESTAMPTZ` | Sim | Timestamp UTC da última modificação de status. |
 | `scheduled_at`| `TIMESTAMPTZ` | Sim | Timestamp UTC programado para execução ou reprocessamento com backoff. |
 | `finished_at` | `TIMESTAMPTZ` | Sim | Timestamp UTC de finalização com sucesso (`DONE`) ou encerramento por falha (`FAILED`). |
 | `attempts` | `INTEGER` | Não | Contador cumulativo de tentativas de processamento executadas. |
-| `errors` | `TEXT` / `JSONB` | Sim | Histórico detalhado de mensagens de erro e rejeições tributárias. |
+| `errors` | `TEXT` / `JSONB` | Sim | Histórico detalhado de mensagens de erro e rejeições antifraude. |
 | `version` | `BIGINT` | Não | Versão para bloqueio otimista contra atualizações concorrentes (*Lost Updates*). |
 
 ---
 
-### Modelo de Documentos (Apache Cassandra — Tabela `nfse_documento`)
+### Modelo de Documentos (Apache Cassandra — Tabela `trx_documento`)
 
-O Cassandra é utilizado como camada de persistência otimizada para **alto volume de escrita** de documentos fiscais (XMLs e PDFs). Enquanto o PostgreSQL gerencia o ciclo de vida transacional, o Cassandra absorve os payloads pesados com acesso direto por chave de partição:
+O Cassandra é utilizado como camada de persistência otimizada para **alto volume de escrita** de documentos financeiras (XMLs e PDFs). Enquanto o PostgreSQL gerencia o ciclo de vida transacional, o Cassandra absorve os payloads pesados com acesso direto por chave de partição:
 
 ```cql
-CREATE KEYSPACE IF NOT EXISTS nfse_keyspace
+CREATE KEYSPACE IF NOT EXISTS trx_keyspace
     WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
-CREATE TABLE nfse_keyspace.nfse_documento (
+CREATE TABLE trx_keyspace.trx_documento (
     chave_acesso  TEXT,
-    xml_dps       TEXT,
-    xml_autorizado TEXT,
-    pdf_danfse    BLOB,
+    payload_pagamento       TEXT,
+    payload_autorizado TEXT,
+    pdf_comprovante    BLOB,
     created_at    TIMESTAMP,
     PRIMARY KEY (chave_acesso)
 );
@@ -227,14 +227,14 @@ CREATE TABLE nfse_keyspace.nfse_documento (
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| `chave_acesso` | `TEXT` (PK) | Chave de acesso da NFS-e — partition key para leitura direta O(1). |
-| `xml_dps` | `TEXT` | XML da DPS (Declaração de Prestação de Serviço) enviada à SEFAZ. |
-| `xml_autorizado` | `TEXT` | XML retornado pela SEFAZ após autorização. |
-| `pdf_danfse` | `BLOB` | PDF do DANFSE gerado para o contribuinte. |
+| `chave_acesso` | `TEXT` (PK) | Chave de acesso da Transação — partition key para leitura direta O(1). |
+| `payload_pagamento` | `TEXT` | XML da pagamento (Requisição de Pagamento) enviada à Bacen/Gateway. |
+| `payload_autorizado` | `TEXT` | XML retornado pela Bacen/Gateway após autorização. |
+| `pdf_comprovante` | `BLOB` | PDF do DATrx gerado para o contribuinte. |
 | `created_at` | `TIMESTAMP` | Timestamp de armazenamento do documento. |
 
 > **Por que Cassandra para documentos?**
-> - **Write-optimized**: O modelo LSM-tree do Cassandra torna inserções massivas extremamente rápidas — ideal para picos de emissão de fim de mês.
+> - **Write-optimized**: O modelo LSM-tree do Cassandra torna inserções massivas extremamente rápidas — ideal para picos de autorização de fim de mês.
 > - **Acesso por chave**: Consultas por `chave_acesso` são O(1) sem necessidade de índices secundários.
 > - **Escalabilidade horizontal**: Adicionar nós distribui a carga linearmente, sem rebalanceamento complexo.
 > - **Separação de responsabilidades**: O PostgreSQL fica livre de payloads pesados (XMLs de 50-200KB, PDFs de 100-500KB), mantendo performance para queries relacionais de status e relatórios.
@@ -256,12 +256,12 @@ O evento publicado no Kafka funciona como o contrato canônico de integração a
     "jobId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     "status": "PENDING",
     "createdAt": "2026-08-28T19:30:00.000Z",
-    "dps": {
-      "cnpjPrestador": "12345678000195",
-      "cnpjTomador": "98765432000109",
-      "valorServico": 2500.00,
-      "codigoTributacaoMunicipio": "1.01",
-      "discriminacao": "Serviços de consultoria em arquitetura de software"
+    "pagamento": {
+      "merchantId": "12345678000195",
+      "customerId": "98765432000109",
+      "valorTransacao": 2500.00,
+      "codigoAntifraude": "1.01",
+      "descricao": "Serviços de consultoria em arquitetura de software"
     }
   }
 }
@@ -277,25 +277,25 @@ O evento publicado no Kafka funciona como o contrato canônico de integração a
 ## 5. Decisões Técnicas e Trade-offs Arquiteturais
 
 ### 1. Por que Apache Kafka em vez de Mensageria Tradicional (RabbitMQ / SQS)?
-- **Capacidade de Replay (Log Imutável)**: O Kafka armazena as mensagens em disco de forma persistente e ordenada. Se uma prefeitura ficar 4 horas fora do ar ou se o *worker* sofrer um bug de implementação, é possível reposicionar o ponteiro de leitura (*offset reset*) e reprocessar todas as NFS-e sem sobrecarregar a API nem perder dados.
-- **Particionamento e Paralelismo Determinístico**: O particionamento permite distribuir a carga entre múltiplos consumidores usando chaves semânticas (como o `cnpjPrestador`), garantindo que notas da mesma empresa sejam processadas na ordem estrita de emissão, enquanto emissores diferentes rodam em paralelo.
+- **Capacidade de Replay (Log Imutável)**: O Kafka armazena as mensagens em disco de forma persistente e ordenada. Se uma Adquirente ficar 4 horas fora do ar ou se o *worker* sofrer um bug de implementação, é possível reposicionar o ponteiro de leitura (*offset reset*) e reprocessar todas as Transação sem sobrecarregar a API nem perder dados.
+- **Particionamento e Paralelismo Determinístico**: O particionamento permite distribuir a carga entre múltiplos consumidores usando chaves semânticas (como o `merchantId`), garantindo que notas da mesma empresa sejam processadas na ordem estrita de autorização, enquanto emissores diferentes rodam em paralelo.
 - **Alta Vazão e Absorção de Picos (Load Leveling)**: O Kafka opera facilmente na casa de dezenas de milhares de eventos por segundo, servindo de colchão de amortecimento contra picos sazonais de fim de mês.
 
 ### 2. Por que Arquitetura Hexagonal?
-- **Desacoplamento Tecnológico**: Se o banco de dados for migrado do PostgreSQL para Spanner ou se a mensageria mudar de Kafka para AWS Kinesis/Pulsar, as regras de negócio de emissão de NFS-e permanecem 100% intactas.
+- **Desacoplamento Tecnológico**: Se o banco de dados for migrado do PostgreSQL para Spanner ou se a mensageria mudar de Kafka para AWS Kinesis/Pulsar, as regras de negócio de Processamento de Pagamentos permanecem 100% intactas.
 - **Testabilidade Superior**: É possível testar todas as regras de transição de status do `Job` em milissegundos através de testes unitários puros, sem precisar levantar o contexto Spring, containers Docker ou bancos de dados reais.
 
 ### 3. Consistência Eventual vs. Consistência Imediata (ACID)
-- No momento da ingestão, a consistência entre o banco da API e o tópico Kafka é assíncrona. O cliente recebe uma garantia de **aceite de processamento** (`HTTP 202 Accepted`), e não a confirmação final da SEFAZ.
+- No momento da ingestão, a consistência entre o banco da API e o tópico Kafka é assíncrona. O cliente recebe uma garantia de **aceite de processamento** (`HTTP 202 Accepted`), e não a confirmação final da Bacen/Gateway.
 - **O Desafio do Dual-Write**: Gravar no PostgreSQL e publicar no Kafka em operações separadas sem atomicidade gera risco de inconsistência. A solução padrão de mercado para mitigar esse trade-off é o **Transactional Outbox Pattern** (detalhado na seção de diagnóstico).
 
 ### 4. Comparativo Arquitetural: Design Original vs. Estado Atual
 
 | Aspecto | Proposta Conceitual Inicial | Estado Atual da Base de Código | Recomendação Sênior |
 |---|---|---|---|
-| **Persistência de Dados** | Dual Database: PostgreSQL (Metadados) + Apache Cassandra (XMLs/PDFs) | PostgreSQL Unificado (`jobsdb`); Cassandra configurado no K8s mas não integrado no código | **Implementar a estratégia Dual Database conforme planejado.** O PostgreSQL gerencia o ciclo de vida transacional (status, timestamps, chave de acesso) com consultas relacionais. O Cassandra absorve alto volume de inserções de documentos fiscais (XML DPS, XML autorizado, PDF DANFSE) explorando sua otimização nativa para *write-heavy workloads* e acesso por chave de partição (`chave_acesso`). Essa separação é um excelente exercício de *Polyglot Persistence* e reflete padrões reais de produção em sistemas fiscais de alto throughput. |
-| **Integração API → Worker** | Event-Carried State Transfer (Payload completo no evento) | Híbrido Inconsistente (Envia bytes no evento, mas busca no banco pelo ID) | **Adotar Event-Carried State Transfer claro** com DTOs fiscais estruturados no evento para evitar dependência síncrona de banco entre módulos. |
-| **Simulador Fiscal** | SDK Nacional de NFS-e integrado com fallback Mock | Status alterado em memória sem simulação de rede ou chamadas externas | **Implementar Gateway de Emissão com Resilience4j** contendo simulação de latência (200ms-1500ms) e taxas de erro controladas para teste de resiliência. |
+| **Persistência de Dados** | Dual Database: PostgreSQL (Metadados) + Apache Cassandra (XMLs/PDFs) | PostgreSQL Unificado (`jobsdb`); Cassandra configurado no K8s mas não integrado no código | **Implementar a estratégia Dual Database conforme planejado.** O PostgreSQL gerencia o ciclo de vida transacional (status, timestamps, chave de acesso) com consultas relacionais. O Cassandra absorve alto volume de inserções de documentos financeiras (Payload do Pagamento, XML autorizado, Comprovante (PDF)) explorando sua otimização nativa para *write-heavy workloads* e acesso por chave de partição (`chave_acesso`). Essa separação é um excelente exercício de *Polyglot Persistence* e reflete padrões reais de produção em sistemas financeiras de alto throughput. |
+| **Integração API → Worker** | Event-Carried State Transfer (Payload completo no evento) | Híbrido Inconsistente (Envia bytes no evento, mas busca no banco pelo ID) | **Adotar Event-Carried State Transfer claro** com DTOs financeiras estruturados no evento para evitar dependência síncrona de banco entre módulos. |
+| **Simulador financeiro** | SDK Nacional de Transação integrado com fallback Mock | Status alterado em memória sem simulação de rede ou chamadas externas | **Implementar Gateway de autorização com Resilience4j** contendo simulação de latência (200ms-1500ms) e taxas de erro controladas para teste de resiliência. |
 
 ---
 
@@ -352,10 +352,10 @@ java -jar jobs-consumer/target/jobs-consumer-0.0.1-SNAPSHOT.jar \
 
 ### Exemplos Práticos de Requisições via `curl`
 
-#### Cenário A: Submeter Lote de Emissão de NFS-e (Caminho Feliz)
+#### Cenário A: Submeter Lote de Processamento de Pagamentos (Caminho Feliz)
 
 ```bash
-curl -X POST http://localhost:8080/api/jobs/nfs \
+curl -X POST http://localhost:8080/api/jobs/trx \
   -H "Content-Type: application/json" \
   -H "X-Correlation-Id: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d" \
   -d '{
@@ -369,10 +369,10 @@ curl -X POST http://localhost:8080/api/jobs/nfs \
       "email": "financeiro@tomador.com.br"
     },
     "servico": {
-      "codigoTributacaoMunicipio": "1.01",
-      "discriminacao": "Desenvolvimento e manutencao de software sob medida",
-      "valorServicos": 15000.00,
-      "aliquotaIss": 0.05
+      "codigoAntifraude": "1.01",
+      "descricao": "Desenvolvimento e manutencao de software sob medida",
+      "valorTransacaos": 15000.00,
+      "taxaGateway": 0.05
     }
   }'
 ```
@@ -412,7 +412,7 @@ Abaixo está o inventário técnico completo dos **17 problemas arquiteturais e 
   - `AsyncConfig.java:10-21`: Define um `ThreadPoolTaskExecutor` com fila em memória limitada a 100 itens (`queueCapacity=100`) e política de rejeição padrão.
 - **Por que é um problema (Visão Sênior / Mentoria)**:
   1. **Commit Prematuro de Offset**: O Spring Kafka gerencia o commit do offset. Quando o método `consumirEvento` despacha a tarefa para a thread secundária e retorna `void`, o container do Spring Kafka interpreta que a mensagem foi processada com sucesso e **comita o offset imediatamente no broker**.
-  2. **Perda Permanente de Mensagens**: Se a aplicação reiniciar durante um deploy, sofrer shutdown forçado no Kubernetes ou estourar a memória (OOM), todas as tarefas enfileiradas na memória do pool (até 100) são descartadas. Como o offset já foi comitado, essas notas fiscais **nunca mais serão lidas pelo Kafka**.
+  2. **Perda Permanente de Mensagens**: Se a aplicação reiniciar durante um deploy, sofrer shutdown forçado no Kubernetes ou estourar a memória (OOM), todas as tarefas enfileiradas na memória do pool (até 100) são descartadas. Como o offset já foi comitado, essas notas financeiras **nunca mais serão lidas pelo Kafka**.
   3. **Neutralização de Retry e DLT**: Exceções lançadas na thread assíncrona não sobem para o listener do Kafka, desativando completamente os mecanismos de Dead Letter Topic e recuperação de falhas do Spring Kafka.
   4. **Quebra da Ordenação por Partição**: O paralelismo de threads em memória quebra a garantia de ordem estrita por partição que o Kafka oferece nativamente.
 - **Direção de Correção Recomendada**:
@@ -431,7 +431,7 @@ Abaixo está o inventário técnico completo dos **17 problemas arquiteturais e 
 
 #### 2. Dual-Write Hazard e Falha Silenciosa no Producer (`jobs-api`)
 - **O que está no código atual**:
-  - `JobService.java:27-39`: O método `scheduleNFsProcessing` salva o job no banco (`repository.save(job)`) e logo em seguida chama `publisher.publish(event)` sem nenhuma anotação `@Transactional` ou garantia de atomicidade.
+  - `JobService.java:27-39`: O método `scheduletrxProcessing` salva o job no banco (`repository.save(job)`) e logo em seguida chama `publisher.publish(event)` sem nenhuma anotação `@Transactional` ou garantia de atomicidade.
   - `KafkaJobEventPublisher.java:26-43`: O envio usa `kafkaTemplate.send()` assíncrono. Em caso de falha de conexão com o Kafka, o erro cai no callback `whenComplete` ou no `catch`, onde é apenas logado com `log.error` e **completamente engolido**.
 - **Por que é um problema**:
   - Se a inserção no banco funcionar mas a comunicação com o Kafka falhar, o job ficará eternamente no PostgreSQL como `PENDING` sem nunca ser processado.
@@ -445,14 +445,14 @@ Abaixo está o inventário técnico completo dos **17 problemas arquiteturais e 
 #### 3. Descarte Total do Campo `errors` no Mapeamento JPA e Repositório
 - **O que está no código atual**:
   - No domínio, `Job.java:21-22` e `Job.java:46-52` (`markAsFailed`) mantêm uma lista `List<String> errors`.
-  - Na entidade JPA `Nfsejob.java` e nos adaptadores `PostgresJobRepository.java:22-49` de ambos os módulos, **o atributo `errors` não existe e não é mapeado**.
+  - Na entidade JPA `Trxjob.java` e nos adaptadores `PostgresJobRepository.java:22-49` de ambos os módulos, **o atributo `errors` não existe e não é mapeado**.
 - **Por que é um problema**:
-  - Quando um job falha durante a validação ou rejeição na SEFAZ, o status é alterado para `FAILED`, mas **o motivo da falha é permanentemente descartado**. Operadores de suporte e clientes da API não terão como descobrir a causa do erro pelo banco de dados.
+  - Quando um job falha durante a validação ou rejeição na Bacen/Gateway, o status é alterado para `FAILED`, mas **o motivo da falha é permanentemente descartado**. Operadores de suporte e clientes da API não terão como descobrir a causa do erro pelo banco de dados.
 - **Direção de Correção Recomendada**:
-  - Adicionar o mapeamento de erros na entidade JPA (via `@ElementCollection` com tabela associativa `nfse_job_errors` ou coluna `TEXT`/`JSONB` `last_error`):
+  - Adicionar o mapeamento de erros na entidade JPA (via `@ElementCollection` com tabela associativa `trx_job_errors` ou coluna `TEXT`/`JSONB` `last_error`):
   ```java
   @ElementCollection(fetch = FetchType.EAGER)
-  @CollectionTable(name = "nfse_job_errors", joinColumns = @JoinColumn(name = "job_id"))
+  @CollectionTable(name = "trx_job_errors", joinColumns = @JoinColumn(name = "job_id"))
   @Column(name = "error_message", columnDefinition = "TEXT")
   private List<String> errors = new ArrayList<>();
   ```
@@ -492,7 +492,7 @@ Abaixo está o inventário técnico completo dos **17 problemas arquiteturais e 
 #### 6. Ausência Física do Módulo `jobs-shared` e Duplicação Massiva de Código
 - **O que está no código atual**:
   - O `pom.xml` da raiz declara `jobs-shared` no `dependencyManagement`, mas o módulo físico **não existe** no disco.
-  - Como consequência, as classes `Job`, `JobStatus`, `JobCreatedEvent`, `Nfsejob`, `PostgresJobRepository`, `PostgresJpaRepository` e `JacksonConfig` foram clonadas integralmente em ambos os módulos.
+  - Como consequência, as classes `Job`, `JobStatus`, `JobCreatedEvent`, `Trxjob`, `PostgresJobRepository`, `PostgresJpaRepository` e `JacksonConfig` foram clonadas integralmente em ambos os módulos.
 - **Por que é um problema**:
   - Duplicação de regras de negócio, quebra de contratos em tempo de execução (*Schema Drift*) e manutenção duplicada.
 - **Direção de Correção Recomendada**:
@@ -577,7 +577,7 @@ Abaixo está o inventário técnico completo dos **17 problemas arquiteturais e 
 
 #### 13. Ausência de Controle de Concorrência Otimista (`@Version`)
 - **O que está no código atual**:
-  - A entidade JPA `Nfsejob` não possui atributo anotado com `@Version`.
+  - A entidade JPA `Trxjob` não possui atributo anotado com `@Version`.
 - **Por que é um problema**:
   - Em um ambiente distribuído onde workers consom mensagens concorrentemente ou realizam retentativas, atualizações simultâneas no mesmo Job sofrem de **Lost Updates** (uma transação sobrescreve o estado da outra silenciosamente).
 - **Direção de Correção Recomendada**:
@@ -593,24 +593,24 @@ Abaixo está o inventário técnico completo dos **17 problemas arquiteturais e 
 - **O que está no código atual**:
   - Mistura de português e inglês: `finalizar()` vs `markAsFailed()`, `consumirEvento()` vs `onMessage()`, `doProcessamento()`, mensagens de log em português em classes com nomes em inglês.
   - Erro ortográfico no pacote: `...infra.database.postgresql.persistance` (com "a" em vez de "e").
-  - Violação de PascalCase na classe JPA `Nfsejob` (em vez de `NfseJob` ou `JobJpaEntity`).
+  - Violação de PascalCase na classe JPA `Trxjob` (em vez de `TrxJob` ou `JobJpaEntity`).
 - **Por que é um problema**:
   - Viola as convenções da linguagem Java, dificulta a indexação de logs em sistemas centralizados (Datadog/ElasticSearch) e gera ruído cognitivo para o time.
 - **Direção de Correção Recomendada**:
-  - Padronizar 100% do código, métodos, logs e pacotes em **Inglês**, reservando o Português apenas para termos estritos de negócio (como a sigla `Nfse`).
+  - Padronizar 100% do código, métodos, logs e pacotes em **Inglês**, reservando o Português apenas para termos estritos de negócio (como a sigla `Trx`).
 
 ---
 
 #### 15. Integração Pendente do Cassandra e Manifests K8s Incompletos
 - **O que está no código atual**:
   - O diretório `k8s/` possui manifests para `jobs-api`, `kafka` e `cassandra.yaml`, mas **não possui deployment para o `jobs-consumer`** nem para o PostgreSQL.
-  - O `cassandra.yaml` está presente no K8s, mas a integração no código Java (Spring Data Cassandra, repositório `NfseDocumentoRepository`) ainda não foi implementada.
+  - O `cassandra.yaml` está presente no K8s, mas a integração no código Java (Spring Data Cassandra, repositório `TrxDocumentoRepository`) ainda não foi implementada.
   - O script `scripts/start-env.sh` tenta executar comandos `cqlsh` para criar o keyspace, mas depende de um container Cassandra no Docker Compose que foi removido.
 - **Por que é um problema**:
   - A estratégia Dual Database (PostgreSQL + Cassandra) é parte essencial da arquitetura planejada, mas está incompleta: o K8s e o script estão prontos, o código não. Isso cria uma desconexão entre infra e aplicação.
 - **Direção de Correção Recomendada**:
   - Adicionar o Cassandra ao `compose.yaml` para desenvolvimento local.
-  - Implementar `NfseDocumentoRepository` com Spring Data Cassandra no `jobs-consumer`.
+  - Implementar `TrxDocumentoRepository` com Spring Data Cassandra no `jobs-consumer`.
   - Criar `k8s/consumer-deployment.yaml` e `k8s/postgres-deployment.yaml`.
   - Atualizar `scripts/start-env.sh` para alinhar com o `compose.yaml` atual.
 
@@ -660,13 +660,13 @@ Este roadmap organiza as melhorias em uma sequência pedagógica de 4 fases incr
    FASE 3: Observabilidade, Infraestrutura & Integração Cassandra
    ├── Introduzir Flyway para versionamento seguro do banco de dados relacional
    ├── Adicionar Spring Web no consumer para expor métricas Prometheus e Actuator na porta 8081
-   ├── Integrar Apache Cassandra ao compose.yaml e implementar NfseDocumentoRepository (Spring Data Cassandra)
-   ├── Implementar persistência de XML DPS, XML autorizado e PDF DANFSE no Cassandra após emissão
+   ├── Integrar Apache Cassandra ao compose.yaml e implementar TrxDocumentoRepository (Spring Data Cassandra)
+   ├── Implementar persistência de Payload do Pagamento, XML autorizado e Comprovante (PDF) no Cassandra após autorização
    ├── Implementar rastreabilidade distribuída (Distributed Tracing com OpenTelemetry e Correlation-Id)
    └── Atualizar manifests Kubernetes (Consumer Deployment, PostgreSQL StatefulSet, Health Probes)
 
    FASE 4: Resiliência Avançada & Escalabilidade de Alto Nível
-   ├── Integrar Resilience4j (Circuit Breaker, Rate Limiter e Timeouts na emissão fiscal)
+   ├── Integrar Resilience4j (Circuit Breaker, Rate Limiter e Timeouts na autorização financeiro)
    ├── Configurar Retry Topics com Backoff Exponencial e Dead Letter Topic (DLT)
    ├── Implementar controle de Idempotência Distribuída no consumidor com chave de acesso
    └── Estabelecer testes automatizados de governança arquitetural com ArchUnit
@@ -676,6 +676,7 @@ Este roadmap organiza as melhorias em uma sequência pedagógica de 4 fases incr
 
 ## Conclusão e Filosofia de Engenharia
 
-O projeto **Jobs — NFS-e Emission Pipeline** reúne conceitos modernos essenciais para a formação de um engenheiro de software sênior: desacoplamento por eventos, isolamento de domínio via Arquitetura Hexagonal e processamento assíncrono resiliente. 
+O projeto **Jobs — Transação Emission Pipeline** reúne conceitos modernos essenciais para a formação de um engenheiro de software sênior: desacoplamento por eventos, isolamento de domínio via Arquitetura Hexagonal e processamento assíncrono resiliente. 
 
-A transição de um desenvolvedor Pleno para Sênior reside no entendimento profundo dos **modos de falha distribuídos**: reconhecer que em sistemas reais a rede oscila, brokers falham, prefeituras ficam fora do ar e a integridade dos dados deve ser preservada em cada transição de estado.
+A transição de um desenvolvedor Pleno para Sênior reside no entendimento profundo dos **modos de falha distribuídos**: reconhecer que em sistemas reais a rede oscila, brokers falham, Adquirentes ficam fora do ar e a integridade dos dados deve ser preservada em cada transição de estado.
+
