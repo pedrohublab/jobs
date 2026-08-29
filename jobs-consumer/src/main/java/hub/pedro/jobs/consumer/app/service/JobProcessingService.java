@@ -3,9 +3,8 @@ package hub.pedro.jobs.consumer.app.service;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+
 import hub.pedro.jobs.consumer.domain.entity.Job;
 import hub.pedro.jobs.consumer.domain.repository.JobRepository;
 
@@ -20,8 +19,7 @@ public class JobProcessingService {
         this.repository = repository;
     }
 
-    @Async("jobProcessingExecutor")
-    public void processarNf(UUID id) {
+    public void execute(UUID id) {
         log.info("[Worker] Buscando Job id={} para processamento assíncrono", id);
         repository.findById(id).ifPresentOrElse(
                 this::doProcessamento,
