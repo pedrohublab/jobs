@@ -1,12 +1,14 @@
 package hub.pedro.jobs.api.infra.kafka.publisher;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import hub.pedro.jobs.api.app.port.out.JobCreatedEvent;
-import hub.pedro.jobs.api.app.port.out.JobEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import hub.pedro.jobs.api.app.port.out.JobCreatedEvent;
+
 
 @Component
 public class KafkaJobEventPublisher implements JobEventPublisher {
@@ -26,19 +28,11 @@ public class KafkaJobEventPublisher implements JobEventPublisher {
     public void publish(JobCreatedEvent job) {
         try {
             String payload = objectMapper.writeValueAsString(job);
-            kafkaTemplate.send(TOPIC, job.id().toString(), payload)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Falha ao publicar evento no Kafka. jobId={}", job.id(), ex);
-                        } else {
-                            log.info("Evento publicado. topic={} partition={} offset={}",
-                                    TOPIC,
-                                    result.getRecordMetadata().partition(),
-                                    result.getRecordMetadata().offset());
-                        }
-                    });
+            kafkaTemplate.send(TOPIC, job.id().toString(), payload).get();
+            log.info("Evento publicado no Kafka com sucesso. topic={} jobId={}", TOPIC, job.id());
         } catch (Exception e) {
-            log.error("Erro ao serializar ou disparar envio para o Kafka. jobId={}", job.id(), e);
+            log.error("Erro ao publicar evento no Kafka. jobId={}", job.id(), e);
+            throw new RuntimeException("Falha ao publicar evento no Kafka", e);
         }
     }
 }
