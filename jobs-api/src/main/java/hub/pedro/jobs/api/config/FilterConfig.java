@@ -11,7 +11,7 @@ public class FilterConfig {
     public FilterRegistrationBean<PayloadSizeFilter> filterRegistrationBean() {
         FilterRegistrationBean<PayloadSizeFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(new PayloadSizeFilter());
-        registration.addUrlPatterns("/api/jobs/nfs", "/api/jobs/nfs/*");
+        registration.addUrlPatterns("/api/jobs/*");
         return registration;
     }
 }
