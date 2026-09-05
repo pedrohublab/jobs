@@ -31,3 +31,18 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Logs ###
+*.log
+
+### Agents (Teamwork / AI) ###
+.agents/
+
+### OS ###
+.DS_Store
+Thumbs.db
+desktop.ini
+
+### Maven Wrapper (binário) ###
+.mvn/wrapper/maven-wrapper.jar
+ROADMAP.md
